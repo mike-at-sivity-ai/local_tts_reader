@@ -15,7 +15,7 @@
 
     .control-panel {
       display: flex;
-      justify-content: space-between;
+      justify-content: space-around;
       margin-bottom: 10px;
       background-color: #16213e;
       padding: 10px;
@@ -230,7 +230,8 @@
     <button class="btn" id="playBtn" title="Play">
       <i class="fas fa-play"></i>
     </button>
-    <button class="btn" id="pauseBtn" title="Pause" disabled>
+    <!-- Pause disabled in nuclear mode - just use stop -->
+    <button class="btn" id="pauseBtn" title="Pause (Disabled)" disabled style="display: none;">
       <i class="fas fa-pause"></i>
     </button>
     <button class="btn" id="stopBtn" title="Stop">

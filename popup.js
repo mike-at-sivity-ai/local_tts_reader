@@ -10,7 +10,6 @@ function updateStatus(message, isError = false) {
 
 function updateControlButtons(state) {
   const playBtn = document.getElementById('playBtn');
-  const pauseBtn = document.getElementById('pauseBtn');
   const stopBtn = document.getElementById('stopBtn');
   const downloadBtn = document.getElementById('downloadBtn');
   const loadingIndicator = document.getElementById('loadingIndicator');
@@ -19,38 +18,26 @@ function updateControlButtons(state) {
   // Hide loading indicator by default
   loadingIndicator.style.display = 'none';
   
-  // Stop button is always enabled (except during loading)
-  stopBtn.disabled = state === 'loading';
-  
+  // NUCLEAR MODE: Simplified states
   switch(state) {
     case 'loading':
       playBtn.disabled = true;
-      pauseBtn.disabled = true;
+      stopBtn.disabled = false; // Can always stop
       downloadBtn.disabled = true;
       seekBar.disabled = true;
       loadingIndicator.style.display = 'flex';
       break;
-    case 'ready':
-      playBtn.disabled = false;
-      pauseBtn.disabled = true;
-      downloadBtn.disabled = !currentAudioUrl;
-      seekBar.disabled = false;
-      break;
     case 'playing':
-      playBtn.disabled = true;
-      pauseBtn.disabled = false;
-      downloadBtn.disabled = !currentAudioUrl;
-      seekBar.disabled = false;
-      break;
-    case 'paused':
-      playBtn.disabled = false;
-      pauseBtn.disabled = true;
+    case 'ready':
+      playBtn.disabled = true; // Disabled during playback
+      stopBtn.disabled = false;
       downloadBtn.disabled = !currentAudioUrl;
       seekBar.disabled = false;
       break;
     case 'stopped':
+    default:
       playBtn.disabled = false;
-      pauseBtn.disabled = true;
+      stopBtn.disabled = true;
       downloadBtn.disabled = !currentAudioUrl;
       seekBar.disabled = true;
       // Reset seek bar to beginning
@@ -58,11 +45,6 @@ function updateControlButtons(state) {
       document.getElementById('currentTime').textContent = '0:00';
       document.getElementById('duration').textContent = '0:00';
       break;
-    default:
-      playBtn.disabled = false;
-      pauseBtn.disabled = true;
-      downloadBtn.disabled = true;
-      seekBar.disabled = true;
   }
 }
 
@@ -196,43 +178,54 @@ document.addEventListener('DOMContentLoaded', async function() {
     document.querySelector('.speed-value').textContent = `${e.target.value}x`;
   });
   
-  // Play button
+  // Play button - NUCLEAR APPROACH: Always fresh start
   document.getElementById('playBtn').addEventListener('click', async function() {
     try {
-      const state = await audioPlayer.getState();
+      console.log('Play button clicked - forcing complete reset');
       
-      if (state === 'paused' || state === 'ready') {
-        audioPlayer.resume();
-        updateControlButtons('playing');
-        
-        // Restart seek bar updates
-        if (updateInterval) clearInterval(updateInterval);
-        updateInterval = startSeekBarUpdates();
-      } else {
-        const tabs = await chrome.tabs.query({active: true, currentWindow: true});
-        const [tab] = tabs;
-        const result = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          function: () => {
-            const selection = window.getSelection();
-            return selection.toString().trim() || document.body.innerText;
-          },
-        });
-
-        let text = result[0].result;
-        const settings = getSettings();
-        
-        // Process text if enabled
-        text = processText(text, settings);
-        
-        await saveSettings();
-        updateControlButtons('loading');
-        await audioPlayer.play(text, settings);
-        
-        // Restart seek bar updates
-        if (updateInterval) clearInterval(updateInterval);
-        updateInterval = startSeekBarUpdates();
+      // NUCLEAR: Always stop everything first
+      audioPlayer.stop();
+      updateControlButtons('stopped');
+      
+      // Clear any intervals
+      if (updateInterval) {
+        clearInterval(updateInterval);
+        updateInterval = null;
       }
+      
+      // Wait for cleanup
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Get text (selected or full page)
+      const tabs = await chrome.tabs.query({active: true, currentWindow: true});
+      const [tab] = tabs;
+      const result = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        function: () => {
+          const selection = window.getSelection();
+          return selection.toString().trim() || document.body.innerText;
+        },
+      });
+
+      let text = result[0].result;
+      const settings = getSettings();
+      
+      // Process text if enabled
+      text = processText(text, settings);
+      
+      await saveSettings();
+      updateControlButtons('loading');
+      
+      // Force reinitialize the audio player
+      audioPlayer.isInitialized = false;
+      await audioPlayer.init();
+      
+      // Now play
+      await audioPlayer.play(text, settings);
+      
+      // Restart seek bar updates
+      if (updateInterval) clearInterval(updateInterval);
+      updateInterval = startSeekBarUpdates();
     } catch (error) {
       console.error('Error:', error);
       updateStatus(error.message, true);

@@ -3,6 +3,7 @@ let audioElement = null;
 let isPlaying = false;
 let audioSource = null;
 let hasSourceConnected = false;
+let currentBlobUrl = null;  // Track current blob URL for cleanup
 
 // Initialize the audio context
 function initAudio() {
@@ -21,10 +22,52 @@ function initAudio() {
   }
 }
 
+// Clean up previous audio resources
+function cleanupPreviousAudio() {
+  console.log('Cleaning up previous audio resources');
+  
+  // Pause and clear audio element first
+  if (audioElement) {
+    audioElement.pause();
+    audioElement.currentTime = 0;
+    // Remove all event listeners to prevent memory leaks
+    audioElement.onplay = null;
+    audioElement.onpause = null;
+    audioElement.onended = null;
+    audioElement.ontimeupdate = null;
+    audioElement.onerror = null;
+    audioElement.src = '';
+    audioElement.load(); // Force reload to clear buffered data
+  }
+  
+  // Revoke previous blob URL if it exists
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
+  }
+  
+  // Disconnect audio source if connected
+  if (audioSource) {
+    try {
+      audioSource.disconnect();
+    } catch (e) {
+      // Ignore errors if already disconnected
+    }
+    audioSource = null;
+  }
+  
+  // Reset connection flag
+  hasSourceConnected = false;
+  isPlaying = false;
+}
+
 // Process audio data received from background script
 function processAudioData(audioDataArray, mimeType, isRecording) {
   try {
     initAudio();
+    
+    // Clean up any previous audio resources
+    cleanupPreviousAudio();
     
     // Convert array back to Uint8Array
     const uint8Array = new Uint8Array(audioDataArray);
@@ -34,6 +77,9 @@ function processAudioData(audioDataArray, mimeType, isRecording) {
     
     // Create URL for the blob
     const audioUrl = URL.createObjectURL(blob);
+    
+    // Store for cleanup later
+    currentBlobUrl = audioUrl;
     
     // If recording is enabled, send URL back for download
     if (isRecording) {
@@ -62,9 +108,6 @@ function playAudioUrl(audioUrl) {
   try {
     console.log('Playing audio URL:', audioUrl);
     
-    // Reset connection flag
-    hasSourceConnected = false;
-    
     // Set up audio element
     audioElement.src = audioUrl;
     
@@ -72,24 +115,15 @@ function playAudioUrl(audioUrl) {
     audioElement.onplay = () => {
       isPlaying = true;
       
-      // Connect to audio context only once
-      if (!hasSourceConnected) {
+      // Only create audio source if we haven't already for this element
+      if (!audioSource) {
         try {
-          // Disconnect previous source if it exists
-          if (audioSource) {
-            try {
-              audioSource.disconnect();
-            } catch (e) {
-              // Ignore errors if already disconnected
-            }
-          }
-          
-          // Create and connect new source
           audioSource = audioContext.createMediaElementSource(audioElement);
           audioSource.connect(audioContext.destination);
           hasSourceConnected = true;
         } catch (e) {
-          console.error('Error connecting audio source:', e);
+          // This can happen if the element was already connected
+          console.log('Audio element already connected to context');
         }
       }
       
@@ -118,6 +152,16 @@ function playAudioUrl(audioUrl) {
       });
     };
     
+    // Add error handler
+    audioElement.onerror = (e) => {
+      console.error('Audio element error:', e);
+      chrome.runtime.sendMessage({ 
+        type: 'streamError', 
+        error: 'Audio playback failed' 
+      });
+      cleanupPreviousAudio();
+    };
+    
     // Start playing
     audioElement.play().catch(err => {
       console.error('Play error:', err);
@@ -125,6 +169,7 @@ function playAudioUrl(audioUrl) {
         type: 'streamError', 
         error: err.message 
       });
+      cleanupPreviousAudio();
     });
   } catch (error) {
     console.error('Error playing audio URL:', error);
@@ -172,6 +217,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
     case 'processAudioData':
       if (message.audioData) {
+        // Always clean up before processing new audio
+        cleanupPreviousAudio();
         processAudioData(message.audioData, message.mimeType, message.isRecording);
       }
       break;
@@ -193,6 +240,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         audioElement.pause();
         audioElement.currentTime = 0;
         chrome.runtime.sendMessage({ type: 'stateUpdate', state: 'stopped' });
+        // Clean up resources when stopping
+        cleanupPreviousAudio();
       }
       break;
       
@@ -211,18 +260,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Initialize when the document loads
+// Initialize immediately - don't wait for DOMContentLoaded
+console.log('Offscreen document loading...');
+initAudio();
+console.log('Offscreen document initialized');
+
+// Also initialize on DOMContentLoaded as backup
 document.addEventListener('DOMContentLoaded', () => {
-  console.log('Offscreen document loaded');
-  
-  // Create audio element
-  audioElement = document.createElement('audio');
-  audioElement.id = 'audioElement';
-  audioElement.controls = true; // For debugging
-  document.body.appendChild(audioElement);
-  
-  // Initialize audio context
-  initAudio();
-  
-  console.log('Offscreen document initialized');
+  console.log('Offscreen document DOM ready');
+  if (!audioElement) {
+    initAudio();
+  }
 });

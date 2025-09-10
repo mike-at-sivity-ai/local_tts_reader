@@ -2,24 +2,37 @@ let offscreenDocument = null;
 let isRecording = false;
 let currentPlayerState = 'stopped';
 
-// Create or get the offscreen document
+// NUCLEAR OPTION: Always destroy and recreate offscreen document
 async function setupOffscreenDocument() {
-  // Check if we already have an offscreen document
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT']
-  });
-
-  if (existingContexts.length > 0) {
-    offscreenDocument = existingContexts[0];
-    return;
+  console.log('Setting up fresh offscreen document...');
+  
+  // First, destroy any existing offscreen document
+  try {
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT']
+    });
+    
+    if (existingContexts.length > 0) {
+      console.log('Destroying existing offscreen document');
+      await chrome.offscreen.closeDocument();
+      // Wait a bit to ensure it's fully closed
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  } catch (e) {
+    console.log('No existing offscreen document to close');
   }
 
-  // Create an offscreen document
+  // Always create a fresh offscreen document
+  console.log('Creating new offscreen document');
   await chrome.offscreen.createDocument({
     url: 'offscreen.html',
     reasons: ['AUDIO_PLAYBACK'],
     justification: 'Playing TTS audio in the background'
   });
+  
+  // Give it time to initialize
+  await new Promise(resolve => setTimeout(resolve, 100));
+  console.log('Fresh offscreen document ready');
 }
 
 // Set up context menu items
@@ -114,6 +127,8 @@ async function processAndReadText(text, tabId) {
 
 // Handle messages from popup or offscreen document
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('Background received message:', message.type);
+  
   switch (message.type) {
     case 'setupOffscreen':
       setupOffscreenDocument().then(() => sendResponse({ success: true }));
@@ -121,21 +136,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       
     case 'startStreaming':
       isRecording = message.record;
-      // Set state to loading before starting the audio stream
-      currentPlayerState = 'loading';
-      chrome.runtime.sendMessage({ 
-        type: 'playerStateUpdate', 
-        state: 'loading' 
-      });
-      startStreamingAudio(message.text, message.settings);
+      // Reset state completely before starting new stream
+      currentPlayerState = 'stopped';
+      
+      // Stop any existing playback first
+      chrome.runtime.sendMessage({ type: 'stop' });
+      
+      // Small delay to ensure clean state
+      setTimeout(() => {
+        currentPlayerState = 'loading';
+        chrome.runtime.sendMessage({ 
+          type: 'playerStateUpdate', 
+          state: 'loading' 
+        });
+        startStreamingAudio(message.text, message.settings);
+      }, 100);
+      
       sendResponse({ success: true });
       return true;
       
-    case 'controlAudio':
-      chrome.runtime.sendMessage({ 
-        type: message.action, 
-        data: message.data 
-      });
+    case 'play':
+    case 'pause':
+    case 'stop':
+      // Forward control messages directly to offscreen document
+      chrome.runtime.sendMessage(message);
+      if (message.type === 'stop') {
+        currentPlayerState = 'stopped';
+      }
       return true;
       
     case 'stateUpdate':
@@ -144,6 +171,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         type: 'playerStateUpdate', 
         state: message.state 
       });
+      
+      // NUCLEAR: Destroy offscreen document when playback stops
+      if (message.state === 'stopped') {
+        console.log('Playback stopped, destroying offscreen document');
+        setTimeout(async () => {
+          try {
+            await chrome.offscreen.closeDocument();
+            console.log('Offscreen document destroyed');
+          } catch (e) {
+            console.log('Error closing offscreen document:', e);
+          }
+        }, 500); // Small delay to ensure final messages are sent
+      }
       return true;
       
     case 'audioReady':
@@ -182,12 +222,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Forward time updates to the popup
       chrome.runtime.sendMessage(message);
       return true;
+      
+    case 'streamComplete':
+      // NUCLEAR: Destroy offscreen document when stream completes
+      console.log('Stream complete, destroying offscreen document');
+      setTimeout(async () => {
+        try {
+          await chrome.offscreen.closeDocument();
+          console.log('Offscreen document destroyed after stream complete');
+        } catch (e) {
+          console.log('Error closing offscreen document:', e);
+        }
+      }, 500);
+      return true;
   }
 });
 
 // Start streaming audio from the TTS server
 async function startStreamingAudio(text, settings) {
   try {
+    // NUCLEAR: Always create fresh offscreen document
     await setupOffscreenDocument();
     
     const response = await fetch(settings.serverUrl, {
@@ -215,6 +269,9 @@ async function startStreamingAudio(text, settings) {
     // Convert blob to array buffer to send to offscreen document
     const arrayBuffer = await audioBlob.arrayBuffer();
     
+    // Wait a bit to ensure offscreen is ready
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
     // Send the audio data to the offscreen document
     chrome.runtime.sendMessage({ 
       type: 'processAudioData', 
@@ -235,6 +292,13 @@ async function startStreamingAudio(text, settings) {
       type: 'playerStateUpdate', 
       state: 'stopped' 
     });
+    
+    // NUCLEAR: Clean up on error too
+    try {
+      await chrome.offscreen.closeDocument();
+    } catch (e) {
+      // Ignore
+    }
   }
 }
 
