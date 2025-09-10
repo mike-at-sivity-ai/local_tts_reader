@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "OpenAI Compatible TTS Reader",
-  "version": "1.1",
-  "description": "Reads webpage content using OpenAI compatible TTS service",
+  "name": "TTS Reader",
+  "version": "1.1.0",
+  "description": "Reads webpage content using Kokoro TTS service",
   "permissions": [
     "activeTab",
     "storage",
@@ -11,20 +11,20 @@
     "contextMenus"
   ],
   "host_permissions": [
-    "http://localhost:8000/*",
+    "http://localhost:8880/*",
     "http://*/*",
     "https://*/*"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "48": "icon48.png"
+      "48": "icon-tts.png"
     }
   },
   "background": {
     "service_worker": "background.js"
   },
   "icons": {
-    "48": "icon48.png"
+    "48": "icon-tts.png"
   }
 }
